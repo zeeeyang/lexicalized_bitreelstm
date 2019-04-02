@@ -1,0 +1,1 @@
+Just run `./cmake.sh`.
