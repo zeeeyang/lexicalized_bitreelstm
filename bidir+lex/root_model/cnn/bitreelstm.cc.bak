@@ -1,0 +1,880 @@
+/*************************************************************************
+	> File Name: bitreelstm.cpp
+	> Author:
+	> Mail:
+	> Created Time: Wed 20 Jan 2016 10:24:13 PM SGT
+ ************************************************************************/
+
+#include "bitreelstm.h"
+using namespace std;
+#include <cassert>
+
+
+bool BiTree::accept(const string& treerep)
+{
+    assert( root == NULL );
+    root = new BiTreeNode;
+    return accept(treerep, *root);
+}
+
+bool BiTree::accept(const string& treerep, struct BiTreeNode& root)
+{
+    if(treerep[0] != '(' || treerep[treerep.size()-1] != ')')
+        return false;
+    const string& remaining_rep = treerep.substr(1, treerep.size()-2);
+    size_t label_pos = remaining_rep.find(" ");
+    const string& label = remaining_rep.substr(0, label_pos);
+    const string& next_rep = remaining_rep.substr(label_pos+1);
+
+    root.label = atoi(label.c_str());
+    if( next_rep[0] != '(' ) // leaf node
+    {
+        root.word = next_rep;
+        if(next_rep == "-LRB-")
+            root.word = "(";
+        else if(next_rep == "-RRB-")
+            root.word = ")";
+        root.isLeaf = true;
+        return true;
+    }
+    root.isLeaf = false;
+    int left_b = 0, right_b = 0, start_pos = 0, end_pos = 0;
+    for(int i = 0; i< (int)next_rep.size(); i++)
+    {
+        if(next_rep[i] == '(')
+        {
+            left_b += 1;
+            if(left_b == 1)
+                start_pos = i;
+        }
+        else if( next_rep[i] == ')' )
+        {
+            right_b += 1;
+            if( right_b == left_b )
+            {
+                end_pos = i;
+                const string& child_rep = next_rep.substr(start_pos, end_pos-start_pos+1);
+                BiTreeNode* child_node = new BiTreeNode;
+                //recursively call function
+                if(!accept(child_rep, *child_node))
+                    return false;
+                root.children.push_back(child_node);
+                left_b = 0;
+                right_b = 0;
+                start_pos = 0;
+                end_pos = 0;
+            }
+        }
+        else if(right_b > left_b)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+BiTree::~BiTree()
+{
+    //cerr<< "destory" << endl;
+    if(root != NULL)
+    {
+        delete root;
+        root = NULL;
+    }
+}
+
+void BiTree::printWords()
+{
+    if(root == NULL)
+        return;
+    vector<string> words;
+    printWords(words, *root);
+    copy(words.begin(), words.end(), ostream_iterator<string>(cerr, " "));
+    cerr<<endl;
+}
+
+void BiTree::printWords(vector<string>& words, struct BiTreeNode& root)
+{
+    if(root.isLeaf)
+    {
+        words.push_back(root.word);
+        return;
+    }
+    for(auto& child: root.children)
+        printWords(words, *child);
+}
+
+void BiTree::countWords(unordered_map<string, int>& word_counts)
+{
+    if(root == NULL)
+        return ;
+    countWords(word_counts, *root);
+}
+
+void BiTree::countWords(unordered_map<string, int>& word_counts, struct BiTreeNode& root)
+{
+    if(root.isLeaf)
+    {
+        word_counts[root.word] += 1;
+        return;
+    }
+    for(auto& child: root.children)
+        countWords(word_counts, *child);
+}
+
+void BiTree::setUnk(cnn::Dict& dict, int unkId, unordered_map<string, vector<float> >& pretrained_embeddings, unordered_map<string, int>& word_counts, unordered_set<string>& training_set, bool isTrain)
+{
+    if(root == NULL)
+        return;
+    setUnk(*root, dict, unkId, pretrained_embeddings, word_counts, training_set, isTrain);
+}
+void BiTree::setUnk(struct BiTreeNode& root, cnn::Dict& dict, int unkId, unordered_map<string, vector<float> >& pretrained_embeddings, unordered_map<string, int>& word_counts, unordered_set<string>& training_dict, bool isTrain)
+{
+    if(root.isLeaf)
+    {
+        //do something
+        root.wordId = dict.Convert(root.word);
+        if(isTrain)
+        {
+            bool not_found = (pretrained_embeddings.find(root.word) == pretrained_embeddings.end());
+
+            if(1 ==  word_counts[root.word] && not_found)
+            {
+                string lower_rep = root.word;
+                for(size_t i = 0; i< lower_rep.size(); i++)
+                    if(lower_rep[i]<='Z' && lower_rep[i]>='A')
+                        lower_rep[i] = lower_rep[i]-('Z'-'z');
+                bool lower_case_found = ( pretrained_embeddings.find(lower_rep) != pretrained_embeddings.end());
+                if(lower_case_found)
+                {
+                    root.wordId = dict.Convert(lower_rep);
+                    //cerr<<"[TRN LOWER]: "<< root.word << endl;
+                    //training_dict.insert( lower_rep );
+                }
+                else {
+                    //root.isSingle = true;
+                    cerr<<"[TRN UNK]: " << root.word << endl;
+                    //training_dict.insert( root.word );
+                    root.wordId = unkId;
+                }
+            }
+            /*else if( 1 == word_counts[root.word] )
+            {
+                  cerr << "[KNOWN SINGLE]:"<< root.word<< endl;
+            }*/
+            /*else{
+                training_dict.insert( root.word );
+            }*/
+            if( word_counts[root.word] >1 && not_found )
+                cerr<<"[2]: " << root.word << endl;
+        }
+        else
+        {
+            //bool not_found_in_training = (training_dict.find(root.word) == training_dict.end());
+            bool not_found_in_pretrained = (pretrained_embeddings.find(root.word) == pretrained_embeddings.end());
+            //if(not_found_in_training && not_found_in_pretrained)
+            if(not_found_in_pretrained)
+            {
+                string lower_rep = root.word;
+                for(size_t i = 0; i< lower_rep.size(); i++)
+                    if(lower_rep[i]<='Z' && lower_rep[i]>='A')
+                        lower_rep[i] = lower_rep[i]-('Z'-'z');
+
+                //bool lower_case_found1 = ( training_dict.find(lower_rep) != training_dict.end());
+                bool lower_case_found2 = ( pretrained_embeddings.find(lower_rep) != pretrained_embeddings.end());
+                //if(lower_case_found1 || lower_case_found2)
+                if(lower_case_found2)
+                {
+                    //cerr<<"[LOWER]: "<< root.word << endl;
+                    root.wordId = dict.Convert(lower_rep);
+                }
+                else {
+                    cerr<<"[UNK]: " << root.word << endl;
+                    root.wordId = unkId;
+                }
+            }
+        }
+    }
+    for(auto& child: root.children)
+        setUnk(*child, dict, unkId, pretrained_embeddings, word_counts, training_dict, isTrain);
+}
+
+enum { BX2I, BLH2I, BLC2I, BRH2I, BRC2I, BBI,  //i
+       BX2F,
+       BLH2LF, BLC2LF, BRH2LF, BRC2LF, BBLF, //l_f
+       BLH2RF, BLC2RF, BRH2RF, BRC2RF, BBRF, //r_f
+       BX2G, BLH2G, BRH2G, BBG, //g
+       BX2O, BLH2O, BRH2O, BC2O, BBO,// o
+
+       LTX2I, LTH2I, LTC2I, LTBI,  //i
+       LTX2F, LTH2F, LTC2F, LTBF, //f
+       LTX2G, LTH2G, LTBG, //g
+       LTX2O, LTH2O, LTC2O, LTBO,// o
+
+       RTH2I, RTC2I,   //i
+       RTH2F, RTC2F,  //f
+       RTH2G,  //g
+       RTH2O, RTC2O, // o
+
+       AVG_L, AVG_R, AVG_B,
+
+       BU2T, TD2T, OUTPUTTD2T, TB,
+       T2L, LB
+     };
+
+BiTreeBuilder::BiTreeBuilder(unsigned layers,
+                             unsigned input_dim,
+                             unsigned hidden_dim,
+                             unsigned VOCAB_SIZE,
+                             unsigned tag_hidden_dim,
+                             unsigned label_size,
+                             int unkId,
+                             Model* model, float pdrop) : layers(layers), kUNK(unkId), pdrop(pdrop) {
+    int model_size = 0;
+    int vocab_model_size = 0;
+    unsigned layer_input_dim = input_dim;
+    assert( layers == 1 );
+    cerr<< "vocab_size: "<< VOCAB_SIZE << endl;
+    //cerr<< "input_dim: " << input_dim << endl;
+    //cerr<< "enum:" << BX2I << "\t" << ATDH << endl;
+
+    p_word = model->add_lookup_parameters(VOCAB_SIZE, {input_dim});
+    vocab_model_size += VOCAB_SIZE * input_dim;
+    cerr<< "lookup size: " << vocab_model_size << endl;
+
+    p_left2tag = model->add_parameters({tag_hidden_dim, hidden_dim});
+    model_size += tag_hidden_dim * hidden_dim;
+
+    p_right2tag = model->add_parameters({tag_hidden_dim, hidden_dim});
+    model_size += tag_hidden_dim * hidden_dim;
+
+    Parameters* p_outputtd2t = model->add_parameters({tag_hidden_dim, hidden_dim});
+    model_size += tag_hidden_dim * hidden_dim;
+
+
+    p_tagbias = model->add_parameters({tag_hidden_dim});
+    model_size += tag_hidden_dim;
+
+    p_tag2label = model->add_parameters({label_size, tag_hidden_dim});
+    model_size += tag_hidden_dim*label_size;
+
+    p_labelbias = model->add_parameters({label_size});
+    model_size += label_size;
+
+    for (unsigned i = 0; i < layers; ++i) {
+        vector<Parameters*> ps;
+        // i
+        //enum { BX2I, BLH2I, BLC2I, BRH2I, BRC2I, BBI,  //i
+        Parameters* p_bx2i = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_blh2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_blc2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brh2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brc2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_bbi = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_bx2i);
+        ps.push_back(p_blh2i);
+        ps.push_back(p_blc2i);
+        ps.push_back(p_brh2i);
+        ps.push_back(p_brc2i);
+        ps.push_back(p_bbi);
+
+        //BX2LF, BLH2LF, BLC2LF, BRH2LF, BRC2LF, BBLF, //l_f
+        Parameters* p_bx2f = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        ps.push_back(p_bx2f);
+
+        Parameters* p_blh2lf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_blc2lf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brh2lf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brc2lf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_bblf = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_blh2lf);
+        ps.push_back(p_blc2lf);
+        ps.push_back(p_brh2lf);
+        ps.push_back(p_brc2lf);
+        ps.push_back(p_bblf);
+
+        //BX2LF, BLH2RF, BLC2RF, BRH2RF, BRC2RF, BBRF, //r_f
+        Parameters* p_blh2rf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_blc2rf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brh2rf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brc2rf = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_bbrf = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_blh2rf);
+        ps.push_back(p_blc2rf);
+        ps.push_back(p_brh2rf);
+        ps.push_back(p_brc2rf);
+        ps.push_back(p_bbrf);
+        //BX2G, BLH2G, BRH2G, BBG, //g
+        Parameters* p_bx2g = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_blh2g = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brh2g = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_bbg = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_bx2g);
+        ps.push_back(p_blh2g);
+        ps.push_back(p_brh2g);
+        ps.push_back(p_bbg);
+        //BX2O, BLH2O, BRH2O, BC2O, BBO,// o
+        Parameters* p_bx2o = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_blh2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_brh2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_bc2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_bbo = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_bx2o);
+        ps.push_back(p_blh2o);
+        ps.push_back(p_brh2o);
+        ps.push_back(p_bc2o);
+        ps.push_back(p_bbo);
+
+        //LTX2I, LTH2I, LTC2I, LTBI,  //i
+        Parameters* p_ltx2i = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_lth2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltc2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltbi = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_ltx2i);
+        ps.push_back(p_lth2i);
+        ps.push_back(p_ltc2i);
+        ps.push_back(p_ltbi);
+
+        //LTX2F, LTH2F, LTC2F, LTBF, //f
+        Parameters* p_ltx2f = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_lth2f = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltc2f = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltbf = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_ltx2f);
+        ps.push_back(p_lth2f);
+        ps.push_back(p_ltc2f);
+        ps.push_back(p_ltbf);
+        //LTX2G, LTH2G,  LTBG, //g
+        Parameters* p_ltx2g = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_lth2g = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltbg = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_ltx2g);
+        ps.push_back(p_lth2g);
+        ps.push_back(p_ltbg);
+        //LTX2O, LTH2O, LTC2O, LTBO,// o
+        Parameters* p_ltx2o = model->add_parameters({hidden_dim, layer_input_dim});
+        model_size += hidden_dim * layer_input_dim;
+
+        Parameters* p_lth2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltc2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_ltbo = model->add_parameters({hidden_dim});
+        model_size += hidden_dim;
+
+        ps.push_back(p_ltx2o);
+        ps.push_back(p_lth2o);
+        ps.push_back(p_ltc2o);
+        ps.push_back(p_ltbo);
+
+        //RTX2I, RTH2I, RTC2I, RTBI,  //i
+        Parameters* p_rth2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_rtc2i = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        ps.push_back(p_rth2i);
+        ps.push_back(p_rtc2i);
+
+        //RTX2F, RTH2F, RTC2F, RTBF, //f
+        Parameters* p_rth2f = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_rtc2f = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        ps.push_back(p_rth2f);
+        ps.push_back(p_rtc2f);
+        //RTX2G, RTH2G,  RTBG, //g
+        Parameters* p_rth2g = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        ps.push_back(p_rth2g);
+        //RTX2O, RTH2O, RTC2O, RTBO,// o
+        Parameters* p_rth2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        Parameters* p_rtc2o = model->add_parameters({hidden_dim, hidden_dim});
+        model_size += hidden_dim * hidden_dim;
+
+        ps.push_back(p_rth2o);
+        ps.push_back(p_rtc2o);
+
+        Parameters* p_avg_l = model->add_parameters({layer_input_dim, layer_input_dim});
+        model_size += layer_input_dim * layer_input_dim;
+
+        Parameters* p_avg_r = model->add_parameters({layer_input_dim, layer_input_dim});
+        model_size += layer_input_dim * layer_input_dim;
+
+        Parameters* p_avg_b = model->add_parameters({layer_input_dim});
+        model_size += layer_input_dim;
+
+        ps.push_back(p_avg_l);
+        ps.push_back(p_avg_r);
+        ps.push_back(p_avg_b);
+
+        layer_input_dim = hidden_dim;  // output (hidden) from 1st layer is input to next
+        //cerr<< ps.size() << endl;
+
+        if(i == 0)
+        {
+            ps.push_back(p_left2tag);
+            ps.push_back(p_right2tag);
+            ps.push_back(p_outputtd2t);
+            ps.push_back(p_tagbias);
+
+            ps.push_back(p_tag2label);
+            ps.push_back(p_labelbias);
+        }
+        params.push_back(ps);
+    }  // layers
+    cerr<< "Model Size: " << model_size << "\t" << vocab_model_size << "\t" << model_size + vocab_model_size << endl;
+    //exit(0);
+}
+
+void BiTreeBuilder::initEmbeddings(unsigned VOCAB_SIZE, cnn::Dict& d, unordered_map<string, vector<float> >& pretrained_embeddings, const vector<float>& averaged_vec)
+{
+    for( size_t  word_index = 0; word_index <  VOCAB_SIZE; word_index++)
+    {
+        auto word_iter = pretrained_embeddings.find( d.Convert(word_index) );
+        if(word_iter != pretrained_embeddings.end())
+        {
+            ((LookupParameters*)p_word)->Initialize(word_index, word_iter->second);
+        }
+        /*else{
+            ((LookupParameters*)p_word)->Initialize(word_index, averaged_vec);
+        }*/
+    }
+    ((LookupParameters*)p_word)->Initialize(kUNK, averaged_vec);
+}
+
+void BiTreeBuilder::buildExpression(ComputationGraph& cg)
+{
+    param_exprs.clear();
+    for (unsigned i = 0; i < layers; ++i) {
+        vector<Expression> vars;
+        auto& p = params[i];
+        for(int j = BX2I; j<= LB; j++)//TODO: add output parameter here
+        {
+            Expression i_expr = parameter(cg, p[j]);
+            vars.push_back(i_expr);
+        }
+        param_exprs.push_back(vars);
+    }
+}
+
+void BiTreeBuilder::buildGraph(ComputationGraph& cg, BiTree& tree, bool eval, bool verbose)
+{
+    //cerr<< "[log]: buildGraph "<< eval << "\t" << verbose << endl;
+    //2. Build Expression
+    buildExpression(cg);
+    //1. Get xi for each node
+    buildNodeRepresentation(cg, *tree.root, eval, verbose);
+    //3, Bottom Up
+    buildBottomUpGraph(cg, *(tree.root), eval, verbose);
+    //4, Top Down
+    buildTopDownGraph(cg, *(tree.root), eval, verbose);
+    //5, Top Down Hidden
+    buildTopDownHiddenRepresentation(cg, *tree.root, eval, verbose);
+}
+
+/*
+ * return covered leafs representaion
+ */
+
+vector<Expression> BiTreeBuilder::buildNodeRepresentation(ComputationGraph& cg, struct BiTreeNode& root, bool eval, bool verbose)
+{
+    if(root.isLeaf)
+    {
+        /*if(root.isSingle && cnn::rand01()<0.5)
+            root.xi = lookup(cg, p_word, kUNK);
+        else*/
+        root.xi = lookup(cg, p_word, root.wordId);
+        if(!eval)
+            root.xi = dropout(root.xi, pdrop);
+        return vector<Expression>({root.xi});
+    }
+    else {
+        vector<Expression> covered_leafs;
+        for(auto& child: root.children)
+        {
+            vector<Expression> child_reps = buildNodeRepresentation(cg, *child, eval, verbose);
+            covered_leafs.insert(covered_leafs.end(), child_reps.begin(), child_reps.end());
+        }
+        //root.xi = kmax_pooling(concatenate_cols(covered_leafs), 1);
+        //root.xi = average(covered_leafs);
+        const vector<Expression>& vars = param_exprs[0];
+
+        BiTreeNode* leftNode = root.children[0];
+        BiTreeNode* rightNode = root.children[1];
+
+        Expression gate_emb = logistic(affine_transform({vars[AVG_B], vars[AVG_L], leftNode->xi, vars[AVG_R], rightNode->xi}));
+        root.xi = cwise_multiply(gate_emb, leftNode->xi) + cwise_multiply(1.0 - gate_emb, rightNode->xi);
+        return covered_leafs;
+    }
+}
+
+vector<Expression> BiTreeBuilder::buildTopDownHiddenRepresentation(ComputationGraph& cg, struct BiTreeNode& root, bool eval, bool verbose)
+{
+    if(root.isLeaf)
+    {
+        root.output_td_hi = root.td_hi;
+        return vector<Expression>({root.output_td_hi});
+    }
+    else {
+        vector<Expression> covered_leafs;
+        for(auto& child: root.children)
+        {
+            vector<Expression> child_reps = buildTopDownHiddenRepresentation(cg, *child, eval, verbose);
+            covered_leafs.insert(covered_leafs.end(), child_reps.begin(), child_reps.end());
+        }
+        root.output_td_hi = average(covered_leafs);
+
+        return covered_leafs;
+    }
+}
+
+
+void BiTreeBuilder::buildBottomUpGraph(ComputationGraph& cg, struct BiTreeNode& root, bool eval, bool verbose)
+{
+    const vector<Expression>& vars = param_exprs[0];
+    if(root.isLeaf)
+    {
+        Expression in = root.xi;
+        //BX2I, BLH2I, BLC2I, BRH2I, BRC2I, BBI,  //i
+        Expression i_input_i = affine_transform({vars[BBI], vars[BX2I], in});
+        Expression i_gate_i = logistic(i_input_i);
+
+        //BX2G, BLH2G, BRH2G, BBG, //g
+        Expression i_input_g = affine_transform({vars[BBG], vars[BX2G], in});
+        Expression i_tanh_g = tanh(i_input_g);
+
+        root.bu_ci = cwise_multiply(i_gate_i, i_tanh_g);
+        //BX2O, BLH2O, BRH2O, BC2O, BBO,// o
+        Expression i_input_o = affine_transform({vars[BBO], vars[BX2O], in});
+        Expression i_gate_o = logistic(i_input_o);
+
+        root.bu_hi = cwise_multiply(i_gate_o, tanh(root.bu_ci));
+    }
+    else {
+        for(auto& child: root.children)
+        {
+            buildBottomUpGraph(cg, *child, eval, verbose);
+        }
+        const Expression& in = root.xi;
+        BiTreeNode* leftNode = root.children[0];
+        BiTreeNode* rightNode = root.children[1];
+        //1, attention first same alpha for h and c
+        //ABUU, ABUW, ABUH,
+        //Expression alpha = vars[ABUU] * tanh (vars[ABUW] * root.xi + vars[ABUH] * leftNode->bu_hi );
+
+        //Expression alpha = affine_transform({vars[ABUU], vars[ABUW], in, vars[ABUH], leftNode->bu_hi});
+        //Expression left_lambda = logistic(alpha);
+        //Expression right_lambda = 1.0 - left_lambda;
+
+        Expression left_h = leftNode->bu_hi; //cwise_multiply(left_lambda, leftNode->bu_hi);
+        Expression left_c = leftNode->bu_ci; //cwise_multiply(left_lambda, leftNode->bu_ci);
+        Expression right_h = rightNode->bu_hi; //cwise_multiply(right_lambda, rightNode->bu_hi);
+        Expression right_c = rightNode->bu_ci; //cwise_multiply(right_lambda, rightNode->bu_ci);
+
+        //2, BX2I, BLH2I, BLC2I, BRH2I, BRC2I, BBI,  //i
+        Expression i_input_i = affine_transform({vars[BBI],
+                                                vars[BX2I], in,
+                                                vars[BLH2I], left_h,
+                                                vars[BLC2I], left_c,
+                                                vars[BRH2I], right_h,
+                                                vars[BRC2I], right_c
+                                                });
+        Expression i_gate_i = logistic(i_input_i);
+
+        //3, BX2LF, BLH2LF, BLC2LF, BRH2LF, BRC2LF, BBLF, //l_f
+        Expression i_input_lf = affine_transform({vars[BBLF],
+                                vars[BX2F], in,
+                                vars[BLH2LF], left_h,
+                                vars[BLC2LF], left_c,
+                                vars[BRH2LF], right_h,
+                                vars[BRC2LF], right_c
+                                                 });
+        Expression i_gate_lf = logistic(i_input_lf);
+
+        //4, BX2RF, BLH2RF, BLC2RF, BRH2RF, BRC2RF, BBRF, //r_f
+        Expression i_input_rf = affine_transform({vars[BBRF],
+                                //vars[BX2RF], in,
+                                vars[BX2F], in,
+                                vars[BLH2RF], left_h,
+                                vars[BLC2RF], left_c,
+                                vars[BRH2RF], right_h,
+                                vars[BRC2RF], right_c
+                                                 });
+        Expression i_gate_rf = logistic(i_input_rf);
+        //5, BX2G, BLH2G, BRH2G, BBG, //g
+        Expression i_input_g = affine_transform({vars[BBG],
+                                                vars[BX2G], in,
+                                                vars[BLH2G], left_h,
+                                                vars[BRH2G], right_h
+                                                });
+        Expression i_tanh_g = tanh(i_input_g);
+        //6,
+        root.bu_ci = cwise_multiply(i_gate_i, i_tanh_g) + cwise_multiply(i_gate_lf, left_c) + cwise_multiply(i_gate_rf, right_c);
+        //7, BX2O, BLH2O, BRH2O, BC2O, BBO,// o
+        Expression i_input_o = affine_transform({vars[BBO],
+                                                vars[BX2O], in,
+                                                vars[BLH2O],left_h,
+                                                vars[BRH2O], right_h,
+                                                vars[BC2O], root.bu_ci
+                                                });
+        Expression i_gate_o = logistic(i_input_o);
+        //8,
+        root.bu_hi = cwise_multiply(i_gate_o, tanh(root.bu_ci));
+    }
+}
+
+void BiTreeBuilder::buildTopDownGraph(ComputationGraph& cg, struct BiTreeNode& root, bool eval, bool verbose)
+{
+    const vector<Expression>& vars = param_exprs[0];
+    //root node as left
+
+    Expression& in = root.xi;
+    //1. i
+    Expression i_input_i = affine_transform({vars[LTBI],
+                                            vars[LTX2I], in
+                                            //,
+                                            //vars[LTH2I], convert_h,
+                                            //vars[LTC2I], convert_c
+                                            });
+    Expression i_gate_i = logistic(i_input_i);
+    //2, //f
+    /*Expression i_input_f =  affine_transform({vars[LTBF],
+                                          vars[LTX2F], in,
+                                          vars[LTH2F], convert_h,
+                                          vars[LTC2F], convert_c});
+    Expression i_gate_f = logistic(i_input_f);*/
+
+    //3, //g
+    Expression i_input_g = affine_transform({vars[LTBG], vars[LTX2G], in
+                                            //,
+                                            //vars[RTH2G], convert_h
+                                            });
+    Expression i_tanh_g = tanh(i_input_g);
+
+    //4, cell
+    //root.td_ci = cwise_multiply(i_gate_i, i_tanh_g) + cwise_multiply(i_gate_f, convert_c);
+    root.td_ci = cwise_multiply(i_gate_i, i_tanh_g);
+    //5, // o
+    Expression i_input_o = affine_transform({vars[LTBO],
+                                            vars[LTX2O], in
+                                            //,
+                                            //vars[LTH2O], convert_h,
+                                            //vars[LTC2O], root.td_ci
+                                            });
+    //i
+    Expression i_gate_o = logistic(i_input_o);
+
+    root.td_hi = cwise_multiply(i_gate_o, tanh(root.td_ci));
+
+    //attention for children
+    if(root.isLeaf) return;
+    BiTreeNode* leftNode = root.children[0];
+    BiTreeNode* rightNode = root.children[1];
+
+    buildTopDownGraph(cg, *leftNode, root, true, eval, verbose);
+    buildTopDownGraph(cg, *rightNode, root, false, eval, verbose);
+    //buildTopDownGraph(cg, *rightNode, root, true, eval, verbose);
+}
+
+void BiTreeBuilder::buildTopDownGraph(ComputationGraph& cg, struct BiTreeNode& root, struct BiTreeNode& rootParent, bool isLeft, bool eval, bool verbose)
+{
+    const vector<Expression>& vars = param_exprs[0];
+    const Expression& in = root.xi;
+    Expression parent_h = rootParent.td_hi;
+    Expression parent_c = rootParent.td_ci;
+    //1, TX2I, TH2I, TC2I, TBI,  //i
+    Expression i_input_i =  affine_transform({vars[LTBI],
+                            vars[LTX2I], in,
+                            vars[isLeft? LTH2I: RTH2I], parent_h,
+                            vars[isLeft? LTC2I: RTC2I], parent_c
+                                             });
+    Expression i_gate_i = logistic(i_input_i);
+    //2, TX2F, TH2F, TC2F, TBF, //f
+    Expression i_input_f =  affine_transform({vars[LTBF],
+                            vars[LTX2F], in,
+                            vars[isLeft? LTH2F: RTH2F], parent_h,
+                            vars[isLeft? LTC2F: RTC2F], parent_c
+                                             });
+    Expression i_gate_f = logistic(i_input_f);
+    //3, TX2G, TH2G, TBG, //g
+    Expression i_input_g = affine_transform({vars[LTBG],
+                                            vars[LTX2G], in,
+                                            vars[isLeft? LTH2G: RTH2G], parent_h
+                                            });
+    Expression i_tanh_g = tanh(i_input_g);
+    //4, cell
+    root.td_ci = cwise_multiply(i_gate_i, i_tanh_g) + cwise_multiply(i_gate_f, parent_c);
+    //5, TX2O, TH2O, TC2O, TBO,// o
+    Expression i_input_o = affine_transform({vars[LTBO],
+                                            vars[LTX2O], in,
+                                            vars[isLeft? LTH2O: RTH2O], parent_h,
+                                            vars[LTC2O], root.td_ci
+                                            });
+    Expression i_gate_o = logistic(i_input_o);
+    //6, h
+    root.td_hi = cwise_multiply(i_gate_o, tanh(root.td_ci));
+    //attention for children
+    if(root.isLeaf) return;
+    BiTreeNode* leftNode = root.children[0];
+    BiTreeNode* rightNode = root.children[1];
+
+    buildTopDownGraph(cg, *leftNode, root, true, eval, verbose);
+    buildTopDownGraph(cg, *rightNode, root, false, eval, verbose);
+    //buildTopDownGraph(cg, *rightNode, root, true, eval, verbose);
+}
+
+Expression BiTreeBuilder::softmax(ComputationGraph& cg,
+                                  BiTree& tree,
+                                  int& total,
+                                  int& rcor,
+                                  int& pcor,
+                                  bool eval,
+                                  bool verbose)
+{
+    vector<Expression> loss;
+    softmax(cg, *tree.root, loss, total, rcor, pcor, eval, verbose);
+    return sum(loss);
+}
+
+void BiTreeBuilder::softmax(ComputationGraph& cg,
+                            struct BiTreeNode& tree,
+                            vector<Expression>& loss,
+                            int& total,
+                            int& rcor,
+                            int& pcor,
+                            bool eval,
+                            bool verbose)
+{
+    auto& vars = param_exprs[0];
+    //Expression i_r_t = tanh(affine_transform({vars[TB], vars[BU2T], tree.bu_hi, vars[TD2T], tree.td_hi}));
+    //Expression i_r_t = tanh(affine_transform({vars[TB], vars[BU2T], tree.bu_hi, vars[TD2T], tree.output_td_hi + tree.td_hi}));  //using node average
+    Expression i_r_t = rectify(affine_transform({vars[TB], vars[BU2T], tree.bu_hi, vars[TD2T], tree.output_td_hi, vars[OUTPUTTD2T],  tree.td_hi}));  //using node average
+    //Expression i_r_t = tanh(affine_transform({vars[TB], vars[TD2T], tree.td_hi})); //only top down
+    //Expression i_r_t = tanh(affine_transform({vars[TB], vars[BU2T], tree.bu_hi})); //only bottom up
+    Expression o_t = affine_transform({vars[LB], vars[T2L], i_r_t});
+
+    cg.incremental_forward();
+    //if(loss.empty())
+    //if(eval&&loss.empty())
+    {
+        //softmax here
+        auto v = as_vector(o_t.value());
+        assert(v.size() > 1);
+        int besti = 0;
+        float best = v[0];
+        for (unsigned i = 1; i < v.size(); ++i)
+            if (v[i] > best) {
+                best = v[i];
+                besti = i;
+            }
+        if(verbose) {
+            //copy(v.begin(), v.end(), ostream_iterator<float>(cerr, " "));
+            /*if(besti == tree.label)
+                cerr<< "1" << endl;
+            else
+                cerr<<"0" << endl;*/
+            cerr<<besti<<endl;
+            //cerr<<endl;
+        }
+        if(besti == tree.label ) {
+            rcor++;
+            pcor++;
+        }
+    }
+    /*else{
+    if(besti == tree.label ){
+     pcor++;
+     }
+     }
+     total++;*/
+
+    Expression nll = pickneglogsoftmax(o_t, tree.label);
+    loss.push_back(nll);
+    if(eval)
+        return;
+    for(auto& child: tree.children)
+        softmax(cg, *child, loss, total, rcor, pcor, eval, verbose);
+}

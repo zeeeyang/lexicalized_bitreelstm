@@ -1,0 +1,51 @@
+#include "cnn/bitreelstm.h"
+#include "cnn/dict.h"
+#include "cnn/training.h"
+unsigned LAYERS = 1;
+unsigned INPUT_DIM = 50;
+unsigned HIDDEN_DIM = 150;
+unsigned TAG_HIDDEN_DIM = 64;
+unsigned LABEL_SIZE = 5;
+float pdrop = 0.2;
+
+using namespace cnn;
+using namespace cnn::expr;
+
+
+
+int main(int argc, char** argv)
+{
+    cnn::Initialize(argc, argv);
+    cnn::Dict dict;
+    BiTree biTree;
+    const string& tree= "(4 (2 You) (4 (3 (2 (2 'll) (2 probably)) (4 (4 love) (2 it))) (2 .)))";
+    biTree.accept(tree, dict);
+    biTree.printWords();
+    dict.Freeze();
+    unsigned VOCAB_SIZE = dict.size();
+    Model model;
+    Trainer* trainer = new SimpleSGDTrainer(&model);
+    BiTreeBuilder treeBuilder(LAYERS, 
+                              INPUT_DIM, 
+                              HIDDEN_DIM, 
+                              VOCAB_SIZE, 
+                              TAG_HIDDEN_DIM, 
+                              LABEL_SIZE, 
+                              &model, 
+                              pdrop);
+    ComputationGraph cg;
+    treeBuilder.buildGraph(cg, biTree);
+    float loss = 0;
+    for(int i = 0; i< 100; i++)
+    {
+        int total = 0;
+        int cor = 0; 
+        loss = 0;
+        Expression yloss = treeBuilder.softmax(cg, biTree, total, cor, true);
+        loss = as_scalar(cg.forward());
+        cg.backward();
+        cerr<< total << "\t" << cor << "\t" << (float) cor/ total <<"\tloss:"<<loss<< endl;
+        trainer->update(1.0);
+    }
+    return 0;
+}
